@@ -55,13 +55,17 @@ AstrBot 默认会在**每一次** LLM 请求里带上**全部工具**的定义�
 
 ## 截图
 
-| 总览 / 设置 | 工具组 |
-| --- | --- |
-| ![overview](docs/screenshots/overview.png) | ![groups](docs/screenshots/groups.png) |
+**总览 / 设置**
 
-| 工具明细 |
-| --- |
-| ![tools](docs/screenshots/tools.png) |
+![overview](docs/screenshots/overview.png)
+
+**工具组**（组显示名、组说明、常驻、隐藏）
+
+![groups](docs/screenshots/groups.png)
+
+**工具明细**（工具说明覆盖、归组、隐藏）
+
+![tools](docs/screenshots/tools.png)
 
 > 截图使用脱敏的模拟数据生成，不包含任何真实环境信息。
 
