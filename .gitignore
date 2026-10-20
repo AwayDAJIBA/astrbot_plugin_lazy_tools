@@ -1,0 +1,21 @@
+# 运行时 / 本地数据
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 插件数据目录（config.json / overrides.json / state.json）
+data/
+plugin_data/
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 日志与临时文件
+*.log
+*.tmp
+*.bak

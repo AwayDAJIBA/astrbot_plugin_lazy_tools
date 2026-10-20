@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>工具组管理</title>
+    <link rel="stylesheet" href="style.css?v=3" />
+    <script src="/api/plugin/page/bridge-sdk.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="title-wrap">
+          <h1>工具组管理</h1>
+          <p class="subtitle">Lazy Tools · 按需工具注入</p>
+        </div>
+        <div class="chips" id="status-chips"></div>
+        <div class="top-actions">
+          <button class="btn ghost" id="btn-refresh" title="重新读取">↻ 刷新</button>
+          <button class="btn ghost" id="btn-export" title="导出配置">导出</button>
+          <button class="btn ghost" id="btn-import" title="导入配置">导入</button>
+          <input type="file" id="import-file" accept="application/json" hidden />
+        </div>
+      </header>
+
+      <nav class="tabs" id="tabs">
+        <button class="tab active" data-tab="overview">总览 / 设置</button>
+        <button class="tab" data-tab="groups">工具组</button>
+        <button class="tab" data-tab="tools">工具明细</button>
+        <button class="tab" data-tab="sessions">会话</button>
+      </nav>
+
+      <main>
+        <div id="loading" class="loading">加载中…</div>
+        <div id="error" class="error hidden"></div>
+
+        <section class="panel hidden" id="panel-overview">
+          <div class="cards" id="stat-cards"></div>
+          <div class="card">
+            <div class="card-head">
+              <h2>注入设置</h2>
+              <span class="muted">保存后下一轮请求生效</span>
+            </div>
+            <div class="form-grid">
+              <label class="field">
+                <span>启用按需注入</span>
+                <input type="checkbox" id="cfg-enabled" />
+              </label>
+              <label class="field">
+                <span>注入模式</span>
+                <select id="cfg-mode">
+                  <option value="lazy">lazy（按需注入，推荐）</option>
+                  <option value="full">full（全量注入，原生行为）</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>最大按需组数</span>
+                <input type="number" id="cfg-max-groups" min="0" max="40" />
+              </label>
+              <label class="field">
+                <span>最大按需工具数</span>
+                <input type="number" id="cfg-max-tools" min="0" max="200" />
+              </label>
+              <label class="field">
+                <span>启用按需的最小工具数</span>
+                <input type="number" id="cfg-min-tools" min="0" max="500" />
+              </label>
+              <label class="field">
+                <span>已加载组记忆时长（秒，0=永久）</span>
+                <input type="number" id="cfg-ttl" min="0" max="2592000" />
+              </label>
+              <label class="field">
+                <span>自动预加载</span>
+                <input type="checkbox" id="cfg-auto-load" />
+              </label>
+              <label class="field">
+                <span>自动预加载上限（组）</span>
+                <input type="number" id="cfg-auto-load-max" min="0" max="8" />
+              </label>
+              <label class="field">
+                <span>请求日志</span>
+                <input type="checkbox" id="cfg-debug" />
+              </label>
+            </div>
+            <label class="field">
+              <span>常驻工具组（每行一个组 id；这些组始终注入）</span>
+              <textarea id="cfg-pin-groups" rows="3" placeholder="files&#10;shell&#10;messaging"></textarea>
+            </label>
+            <label class="field">
+              <span>常驻工具（每行一个工具名）</span>
+              <textarea id="cfg-pin-tools" rows="2" placeholder="send_message_to_user"></textarea>
+            </label>
+            <div class="actions">
+              <button class="btn primary" id="btn-save-config">保存设置</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>最近请求</h2></div>
+            <div id="stats-history" class="stats-history"></div>
+          </div>
+        </section>
+
+        <section class="panel hidden" id="panel-groups">
+          <div class="panel-head">
+            <h2>工具组</h2>
+            <span class="muted">可改显示名、组说明（告诉模型这组一般用来干什么）、常驻与隐藏。</span>
+          </div>
+          <div id="groups-list" class="list"></div>
+          <div id="hidden-groups-wrap" class="card hidden">
+            <div class="card-head"><h2>已隐藏的组</h2></div>
+            <div id="hidden-groups-list" class="list"></div>
+          </div>
+        </section>
+
+        <section class="panel hidden" id="panel-tools">
+          <div class="panel-head">
+            <h2>工具明细</h2>
+            <span class="muted">可改工具说明、归组、隐藏；清空保存后恢复自动值。</span>
+          </div>
+          <div class="filters">
+            <input type="search" id="tool-search" placeholder="搜索工具名 / 说明…" />
+            <select id="tool-group-filter"><option value="">全部组</option></select>
+            <label class="inline-check"><input type="checkbox" id="show-hidden-tools" /> 显示被隐藏/残留项</label>
+          </div>
+          <div id="tools-list" class="list"></div>
+        </section>
+
+        <section class="panel hidden" id="panel-sessions">
+          <div class="panel-head">
+            <h2>会话</h2>
+            <span class="muted">已加载组按会话记忆；可在这里清空。</span>
+          </div>
+          <div class="actions">
+            <button class="btn danger" id="btn-clear-sessions">清空所有会话已加载记忆</button>
+            <button class="btn ghost" id="btn-reset-overrides">重置全部组/工具覆盖项</button>
+          </div>
+          <div id="sessions-list" class="list"></div>
+        </section>
+      </main>
+
+      <div id="toast" class="toast hidden"></div>
+    </div>
+    <script src="app.js?v=3"></script>
+  </body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "enabled": {
+    "type": "bool",
+    "label": "启用按需注入",
+    "description": "总开关。关闭后恢复 AstrBot 原生全量工具注入。更多设置（常驻组、上限、组说明、工具说明等）在插件详情 → 页面 → 工具组管理中调整。",
+    "default": true
+  }
+}
