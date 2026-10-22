@@ -32,6 +32,12 @@ from .config import (
     save_config,
     save_overrides,
 )
+from .skills import (
+    apply_skills_block,
+    first_sentence,
+    parse_skills_block,
+    skill_overrides,
+)
 
 LAZY_TOOL_CALL_PROMPT = (
     "Tool access is two-stage to keep requests compact. "
@@ -726,6 +732,11 @@ class LazyToolsRuntime:
         self.last_stats: dict[str, Any] | None = None
         self._warned_skills_like = False
         self._last_full_tool_set: ToolSet | None = None
+        # 技能（AstrBot `## Skills` 段）状态：最近一次解析到的条目 / 统计 / 发现缓存
+        self._last_skill_items: list[dict[str, Any]] = []
+        self._skill_stats: dict[str, Any] | None = None
+        self._skills_cache: list[dict[str, Any]] = []
+        self._skills_cache_ts = 0.0
         self._load_state()
 
     # -- 状态持久化 -------------------------------------------------------
@@ -760,6 +771,9 @@ class LazyToolsRuntime:
             last_stats = payload.get("last_stats")
             if isinstance(last_stats, dict):
                 self.last_stats = last_stats
+            skill_stats = payload.get("skill_stats")
+            if isinstance(skill_stats, dict):
+                self._skill_stats = skill_stats
         except Exception as exc:  # noqa: BLE001
             self.log.warning("[lazy-tools] 读取会话状态失败: %s", exc)
 
@@ -778,6 +792,7 @@ class LazyToolsRuntime:
                 "sessions": sessions,
                 "stats_history": self._stats_history[-_STATS_HISTORY_LIMIT:],
                 "last_stats": self.last_stats,
+                "skill_stats": self._skill_stats,
             }
             path = self.data_dir / self.STATE_FILENAME
             text = json.dumps(payload, ensure_ascii=False)
@@ -861,13 +876,37 @@ class LazyToolsRuntime:
                         entry.pop("hidden", None)
                 if not entry:
                     tools.pop(name, None)
+        skill_updates = payload.get("skill_updates") or payload.get("skills") or {}
+        if isinstance(skill_updates, dict):
+            skills = overrides.setdefault("skills", {})
+            for skill_name, item in skill_updates.items():
+                name = str(skill_name).strip()
+                if not name or not isinstance(item, dict):
+                    continue
+                entry = skills.setdefault(name, {})
+                if "description" in item:
+                    desc = clean_one_line(item.get("description"), 1000)
+                    if desc:
+                        entry["description"] = desc
+                    else:
+                        entry.pop("description", None)
+                if "hidden" in item:
+                    if item.get("hidden"):
+                        entry["hidden"] = True
+                    else:
+                        entry.pop("hidden", None)
+                if not entry:
+                    skills.pop(name, None)
         for group_id in payload.get("reset_group_ids") or []:
             overrides.get("groups", {}).pop(str(group_id), None)
         for tool_name in payload.get("reset_tool_names") or []:
             overrides.get("tools", {}).pop(str(tool_name), None)
+        for skill_name in payload.get("reset_skill_names") or []:
+            overrides.get("skills", {}).pop(str(skill_name), None)
         if payload.get("reset_all"):
             overrides["groups"] = {}
             overrides["tools"] = {}
+            overrides["skills"] = {}
         self.overrides = save_overrides(self.data_dir, overrides)
         return self.overrides
 
@@ -916,27 +955,131 @@ class LazyToolsRuntime:
         request: Any,
         plugin_config: dict[str, Any] | None = None,
     ) -> bool:
-        """把 req.func_tool 换成 lazy 集合；成功返回 True。"""
+        """改写请求：lazy 工具注入 + Skills 段按需压缩。
+
+        两步互相独立：工具注入失败（例如工具太少、模式为 full）时，
+        技能段压缩仍然可以生效；只有两步都没做事时才返回 False。
+        """
         cfg = self.config
         if not self._effective_enabled(plugin_config or {}):
             return False
-        if cfg.get("mode") != "lazy":
+
+        controller = None
+        tool_stats: dict[str, Any] | None = None
+        group_total = 0
+        if cfg.get("mode") == "lazy":
+            applied = self._transform_tools(event, request)
+            if applied is not None:
+                controller, tool_stats = applied
+                group_total = int(tool_stats.pop("_group_total", 0) or 0)
+
+        skill_stats = self._apply_skills(request)
+        if tool_stats is None and skill_stats is None:
             return False
+
+        umo = str(getattr(event, "unified_msg_origin", "") or "")
+        key = _session_key_from(umo, request)
+
+        stats: dict[str, Any] = dict(tool_stats or {})
+        if tool_stats is None:
+            # 没有做工具注入（full 模式 / 工具太少）：仍记录全量工具规模，方便页面显示。
+            full_tool_set = getattr(request, "func_tool", None)
+            tool_count = (
+                len(full_tool_set.tools)
+                if isinstance(full_tool_set, ToolSet)
+                else 0
+            )
+            stats.setdefault("injected_tools", tool_count)
+            stats.setdefault("full_tools", tool_count)
+            stats.setdefault("injected_tokens", 0)
+            stats.setdefault("full_tokens", 0)
+            stats.setdefault("saved_tokens", 0)
+            stats.setdefault("saved_percent", 0.0)
+            stats.setdefault("active_groups", [])
+            stats.setdefault("pinned_groups", list(cfg.get("pin_groups") or []))
+            stats.setdefault("active_tools", [])
+            stats.setdefault("auto_loaded", [])
+        stats.update(
+            {
+                "ts": time.time(),
+                "umo": umo,
+                "session": key,
+                "mode": cfg.get("mode", "lazy"),
+                "tools_applied": tool_stats is not None,
+                "skills_applied": bool(skill_stats and skill_stats.get("applied")),
+                "skills_count": int((skill_stats or {}).get("skills") or 0),
+                "skills_hidden": int((skill_stats or {}).get("hidden") or 0),
+                "skills_overridden": int((skill_stats or {}).get("overridden") or 0),
+                "skills_before_chars": int((skill_stats or {}).get("before_chars") or 0),
+                "skills_after_chars": int((skill_stats or {}).get("after_chars") or 0),
+                "skills_saved_chars": max(
+                    0,
+                    int((skill_stats or {}).get("before_chars") or 0)
+                    - int((skill_stats or {}).get("after_chars") or 0),
+                ),
+            }
+        )
+        self.last_stats = stats
+        self._stats_history.append(stats)
+        if len(self._stats_history) > _STATS_HISTORY_LIMIT:
+            self._stats_history = self._stats_history[-_STATS_HISTORY_LIMIT:]
+
+        if cfg.get("debug_log"):
+            if tool_stats is not None:
+                self.log.info(
+                    "[lazy-tools] injected %d/%d tools, %d/%d groups active (%s); "
+                    "schema tokens ≈%d → ≈%d (−%.0f%%)",
+                    stats["injected_tools"],
+                    stats["full_tools"],
+                    len(stats["active_groups"]),
+                    group_total,
+                    ", ".join(stats["active_groups"]) or "none",
+                    stats["full_tokens"],
+                    stats["injected_tokens"],
+                    stats["saved_percent"],
+                )
+                if stats.get("auto_loaded"):
+                    self.log.info(
+                        "[lazy-tools] auto-loaded group(s): %s",
+                        ", ".join(stats["auto_loaded"]),
+                    )
+            if skill_stats is not None:
+                before = skill_stats["before_chars"]
+                after = skill_stats["after_chars"]
+                percent = (before - after) * 100.0 / before if before else 0.0
+                self.log.info(
+                    "[lazy-tools] skills: %d skills, Skills 段 %d → %d chars (−%.0f%%), "
+                    "%d hidden, %d custom intro",
+                    skill_stats.get("skills", 0),
+                    before,
+                    after,
+                    percent,
+                    skill_stats.get("hidden", 0),
+                    skill_stats.get("overridden", 0),
+                )
+        self._save_state()
+        return True
+
+    def _transform_tools(
+        self, event: Any, request: Any
+    ) -> tuple[LazyToolsController, dict[str, Any]] | None:
+        """只做工具注入；返回 (controller, stats) 或 None。"""
+        cfg = self.config
         full_tool_set = getattr(request, "func_tool", None)
         if not isinstance(full_tool_set, ToolSet) or not full_tool_set.tools:
-            return False
+            return None
         if len(full_tool_set.tools) <= _coerce_int(cfg.get("min_tools_for_lazy"), 12):
-            return False
+            return None
         if any(tool.name in _META_NAME_SET for tool in full_tool_set.tools):
             self.log.warning(
                 "[lazy-tools] skipped: existing tool name collides with meta tools."
             )
-            return False
+            return None
         self._warn_if_skills_like()
 
         catalog = build_catalog(full_tool_set, self.overrides)
         if not catalog.groups:
-            return False
+            return None
         self._last_full_tool_set = full_tool_set
         umo = str(getattr(event, "unified_msg_origin", "") or "")
         key = _session_key_from(umo, request)
@@ -958,38 +1101,106 @@ class LazyToolsRuntime:
             pass
 
         stats = controller.stats()
-        stats.update(
-            {
-                "ts": time.time(),
-                "umo": umo,
-                "session": key,
-                "mode": "lazy",
-            }
+        stats["_group_total"] = len(catalog.groups)
+        return controller, stats
+
+    # -- 技能段 -----------------------------------------------------------
+
+    def _apply_skills(self, request: Any) -> dict[str, Any] | None:
+        """压缩 system prompt 的 `## Skills` 段（含自定义技能简介）。"""
+        cfg = self.config
+        if not cfg.get("skills_enabled", True):
+            return None
+        prompt = getattr(request, "system_prompt", "") or ""
+        if not prompt:
+            return None
+        items = parse_skills_block(prompt)
+        if items:
+            self._last_skill_items = items
+        new_prompt, stats = apply_skills_block(
+            prompt,
+            overrides=self.overrides,
+            desc_max_chars=_coerce_int(cfg.get("skill_desc_max_chars"), 50),
+            group_root=bool(cfg.get("skill_group_root", True)),
+            compress_rules=bool(cfg.get("skill_compress_rules", True)),
         )
-        self.last_stats = stats
-        self._stats_history.append(stats)
-        if len(self._stats_history) > _STATS_HISTORY_LIMIT:
-            self._stats_history = self._stats_history[-_STATS_HISTORY_LIMIT:]
-        if cfg.get("debug_log"):
-            self.log.info(
-                "[lazy-tools] injected %d/%d tools, %d/%d groups active (%s); "
-                "schema tokens ≈%d → ≈%d (−%.0f%%)",
-                stats["injected_tools"],
-                stats["full_tools"],
-                len(stats["active_groups"]),
-                len(catalog.groups),
-                ", ".join(stats["active_groups"]) or "none",
-                stats["full_tokens"],
-                stats["injected_tokens"],
-                stats["saved_percent"],
-            )
-            if stats["auto_loaded"]:
-                self.log.info(
-                    "[lazy-tools] auto-loaded group(s): %s",
-                    ", ".join(stats["auto_loaded"]),
+        if not stats.get("applied"):
+            return None
+        request.system_prompt = new_prompt
+        self._skill_stats = {**stats, "ts": time.time()}
+        return stats
+
+    def _discover_skills(self) -> list[dict[str, Any]]:
+        """读取 AstrBot 已安装技能清单（30 秒缓存，失败返回空列表）。"""
+        now = time.time()
+        if self._skills_cache and now - self._skills_cache_ts < 30:
+            return self._skills_cache
+        items: list[dict[str, Any]] = []
+        try:
+            from astrbot.core.skills.skill_manager import SkillManager
+
+            manager = SkillManager()
+            for skill in manager.list_skills(active_only=False):
+                items.append(
+                    {
+                        "name": str(getattr(skill, "name", "") or ""),
+                        "description": str(getattr(skill, "description", "") or ""),
+                        "path": str(getattr(skill, "path", "") or ""),
+                        "active": bool(getattr(skill, "active", True)),
+                        "source": str(
+                            getattr(skill, "source_label", "")
+                            or getattr(skill, "source_type", "")
+                            or ""
+                        ),
+                        "plugin": str(getattr(skill, "plugin_name", "") or ""),
+                    }
                 )
-        self._save_state()
-        return True
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("[lazy-tools] 读取技能目录失败: %s", exc)
+            items = []
+        self._skills_cache = items
+        self._skills_cache_ts = now
+        return items
+
+    def skill_inventory(self) -> list[dict[str, Any]]:
+        """给管理页用的技能清单：已安装的 + 本会话实际出现的 + 覆盖项残留。"""
+        cfg = self.config
+        max_chars = _coerce_int(cfg.get("skill_desc_max_chars"), 50)
+        overrides_map = skill_overrides(self.overrides)
+        discovered = {item["name"]: item for item in self._discover_skills()}
+        seen = {item["name"]: item for item in self._last_skill_items}
+        names = sorted(set(discovered) | set(seen) | set(overrides_map))
+        rows: list[dict[str, Any]] = []
+        for name in names:
+            source = discovered.get(name) or {}
+            prompt_item = seen.get(name) or {}
+            override = overrides_map.get(name) or {}
+            description = str(
+                prompt_item.get("description")
+                or source.get("description")
+                or ""
+            )
+            path = str(prompt_item.get("path") or source.get("path") or "")
+            auto_intro = first_sentence(description, max_chars)
+            rows.append(
+                {
+                    "name": name,
+                    "description": description,
+                    "auto_intro": auto_intro,
+                    "intro": str(override.get("description") or auto_intro),
+                    "overridden": bool(override.get("description")),
+                    "hidden": bool(override.get("hidden")),
+                    "path": path,
+                    "active": bool(source.get("active", True))
+                    if source
+                    else bool(prompt_item),
+                    "source": str(source.get("source") or ""),
+                    "plugin": str(source.get("plugin") or ""),
+                    "seen": bool(prompt_item),
+                    "missing": not source and not prompt_item,
+                }
+            )
+        return rows
 
     def _warn_if_skills_like(self) -> None:
         if self._warned_skills_like:
@@ -1138,6 +1349,23 @@ class LazyToolsRuntime:
             "group_overrides": {
                 gid: item
                 for gid, item in (self.overrides.get("groups") or {}).items()
+                if isinstance(item, dict)
+            },
+            "skills_config": {
+                "skills_enabled": bool(self.config.get("skills_enabled", True)),
+                "skill_desc_max_chars": _coerce_int(
+                    self.config.get("skill_desc_max_chars"), 50
+                ),
+                "skill_group_root": bool(self.config.get("skill_group_root", True)),
+                "skill_compress_rules": bool(
+                    self.config.get("skill_compress_rules", True)
+                ),
+            },
+            "skills": self.skill_inventory(),
+            "skill_stats": self._skill_stats,
+            "skill_overrides": {
+                name: item
+                for name, item in (self.overrides.get("skills") or {}).items()
                 if isinstance(item, dict)
             },
         }

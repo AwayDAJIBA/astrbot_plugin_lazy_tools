@@ -92,8 +92,15 @@
       { html: "schema <strong>" + fmtNum(stats.injected_tokens || 0) + "</strong> tokens" },
       { html: "省 <strong>" + fmtPercent(stats.saved_percent || 0) + "</strong>" },
       { html: "组 <strong>" + fmtNum((state.groups || []).length) + "</strong>" },
+      { html: "技能 <strong>" + fmtNum((state.skills || []).length) + "</strong>" },
       { html: "会话 <strong>" + fmtNum((state.sessions || []).length) + "</strong>" }
     ];
+    if (stats.skills_applied) {
+      chips.push({
+        html: "技能段省 <strong>" + fmtNum(stats.skills_saved_chars || 0) + "</strong> 字符",
+        cls: "ok"
+      });
+    }
     el.innerHTML = chips
       .map(function (chip) {
         return '<span class="chip ' + (chip.cls || "") + '">' + chip.html + "</span>";
@@ -105,9 +112,16 @@
     var el = $("#stat-cards");
     if (!el || !state) return;
     var stats = state.stats || null;
+    var skillStats = state.skill_stats || null;
     var cards = [];
     if (!stats) {
       cards.push({ label: "上次请求", value: "暂无", hint: "发一条会触发 LLM 的消息后出现" });
+    } else if (stats.tools_applied === false) {
+      cards.push({
+        label: "工具注入",
+        value: "full 模式",
+        hint: "本轮没有做按需工具注入"
+      });
     } else {
       cards.push({
         label: "注入工具 / 全部",
@@ -130,13 +144,32 @@
       cards.push({
         label: "上次加载组",
         value: String((stats.active_groups || []).length),
-        hint: (stats.active_groups || []).join(", ") || "(无)",
+        hint: (stats.active_groups || []).join(", ") || "(无)"
+      });
+    }
+    if (stats && stats.skills_applied) {
+      cards.push({
+        label: "技能段字符",
+        value: fmtNum(stats.skills_before_chars) + " → " + fmtNum(stats.skills_after_chars),
+        hint: "省 " + fmtNum(stats.skills_saved_chars) + " 字符 / 请求",
+        cls: "ok"
+      });
+    } else if (skillStats && skillStats.applied) {
+      cards.push({
+        label: "技能段字符",
+        value: fmtNum(skillStats.before_chars) + " → " + fmtNum(skillStats.after_chars),
+        hint: "省 " + fmtNum((skillStats.before_chars || 0) - (skillStats.after_chars || 0)) + " 字符",
+        cls: "ok"
       });
     }
     cards.push({
       label: "覆盖项",
-      value: fmtNum(Object.keys((state.overrides || {}).tools || {}).length + Object.keys((state.overrides || {}).groups || {}).length),
-      hint: "工具 + 组覆盖条数"
+      value: fmtNum(
+        Object.keys((state.overrides || {}).tools || {}).length +
+          Object.keys((state.overrides || {}).groups || {}).length +
+          Object.keys((state.overrides || {}).skills || {}).length
+      ),
+      hint: "工具 + 组 + 技能覆盖条数"
     });
     el.innerHTML = cards
       .map(function (card) {
@@ -161,15 +194,28 @@
     }
     el.innerHTML = history
       .map(function (item) {
-        return (
-          '<div class="entry">' +
-          "<span>" + esc(fmtTime(item.ts)) + "</span>" +
-          "<span>" + fmtNum(item.injected_tools) + "/" + fmtNum(item.full_tools) + " 工具</span>" +
-          "<span>schema " + fmtNum(item.injected_tokens) + " / " + fmtNum(item.full_tokens) + "</span>" +
-          "<span>省 <strong>" + fmtPercent(item.saved_percent) + "</strong></span>" +
-          "<span>" + esc((item.active_groups || []).join(", ") || "无组") + "</span>" +
-          "</div>"
-        );
+        var parts = [
+          "<span>" + esc(fmtTime(item.ts)) + "</span>"
+        ];
+        if (item.tools_applied === false) {
+          parts.push("<span>工具 full 模式</span>");
+        } else {
+          parts.push(
+            "<span>" + fmtNum(item.injected_tools) + "/" + fmtNum(item.full_tools) + " 工具</span>",
+            "<span>schema " + fmtNum(item.injected_tokens) + " / " + fmtNum(item.full_tokens) + "</span>",
+            "<span>省 <strong>" + fmtPercent(item.saved_percent) + "</strong></span>"
+          );
+        }
+        if (item.skills_applied) {
+          parts.push(
+            "<span>技能段 " + fmtNum(item.skills_before_chars) + " → " +
+              fmtNum(item.skills_after_chars) + " chars</span>"
+          );
+        }
+        if ((item.active_groups || []).length) {
+          parts.push("<span>" + esc((item.active_groups || []).join(", ")) + "</span>");
+        }
+        return '<div class="entry">' + parts.join("") + "</div>";
       })
       .join("");
   }
@@ -209,6 +255,10 @@
     setValue("#cfg-debug", cfg.debug_log);
     setValue("#cfg-pin-groups", (cfg.pin_groups || []).join("\n"));
     setValue("#cfg-pin-tools", (cfg.pin_tools || []).join("\n"));
+    setValue("#cfg-skills-enabled", cfg.skills_enabled);
+    setValue("#cfg-skill-desc-max", cfg.skill_desc_max_chars);
+    setValue("#cfg-skill-group-root", cfg.skill_group_root);
+    setValue("#cfg-skill-compress-rules", cfg.skill_compress_rules);
   }
 
   function collectConfig() {
@@ -223,7 +273,11 @@
       session_ttl_seconds: Number(getValue("#cfg-ttl")) || 0,
       auto_load: getChecked("#cfg-auto-load"),
       auto_load_max_groups: Number(getValue("#cfg-auto-load-max")) || 0,
-      debug_log: getChecked("#cfg-debug")
+      debug_log: getChecked("#cfg-debug"),
+      skills_enabled: getChecked("#cfg-skills-enabled"),
+      skill_desc_max_chars: Number(getValue("#cfg-skill-desc-max")) || 50,
+      skill_group_root: getChecked("#cfg-skill-group-root"),
+      skill_compress_rules: getChecked("#cfg-skill-compress-rules")
     };
   }
 
@@ -458,6 +512,80 @@
       .join("");
   }
 
+  function renderSkills() {
+    var listEl = $("#skills-list");
+    var statsEl = $("#skill-stats");
+    if (!listEl || !state) return;
+    var cfg = state.skills_config || {};
+    setValue("#cfg-skills-enabled", cfg.skills_enabled !== false);
+    setValue("#cfg-skill-desc-max", cfg.skill_desc_max_chars || 50);
+    setValue("#cfg-skill-group-root", cfg.skill_group_root !== false);
+    setValue("#cfg-skill-compress-rules", cfg.skill_compress_rules !== false);
+
+    if (statsEl) {
+      var st = state.skill_stats;
+      if (st && st.applied) {
+        var before = Number(st.before_chars || 0);
+        var after = Number(st.after_chars || 0);
+        var saved = Math.max(0, before - after);
+        var pct = before ? (saved / before) * 100 : 0;
+        statsEl.textContent =
+          "上次压缩：" + st.skills + " 个技能，Skills 段 " + before + " → " + after +
+          " 字符（省 " + saved + "，−" + pct.toFixed(0) + "%）" +
+          (st.hidden ? "，隐藏 " + st.hidden + " 个" : "") +
+          (st.overridden ? "，自定义简介 " + st.overridden + " 个" : "");
+      } else {
+        statsEl.textContent = "还没有技能压缩记录，发一条会触发 LLM 的消息后再看。";
+      }
+    }
+
+    var skills = state.skills || [];
+    if (!skills.length) {
+      listEl.innerHTML =
+        '<div class="hint-box">没有发现技能。AstrBot 的 skills 目录为空，或者当前还没有请求触发技能注入。</div>';
+      return;
+    }
+    listEl.innerHTML = skills
+      .map(function (skill) {
+        var badges = "";
+        if (!skill.active) badges += '<span class="badge muted">未启用</span>';
+        if (skill.hidden) badges += '<span class="badge warn">已隐藏</span>';
+        if (skill.overridden) badges += '<span class="badge">自定义简介</span>';
+        if (skill.missing) badges += '<span class="badge warn">已不存在</span>';
+        if (skill.plugin) badges += '<span class="badge muted">' + esc(skill.plugin) + "</span>";
+        return (
+          '<div class="row" data-skill="' + esc(skill.name) + '">' +
+          '<div class="row-head">' +
+          "<code>" + esc(skill.name) + "</code>" +
+          badges +
+          "</div>" +
+          '<div class="row-body">' +
+          '<div class="tool-auto-desc">自动简介：' + esc(skill.auto_intro || "(无)") + "</div>" +
+          (skill.path
+            ? '<div class="skill-path muted small">SKILL.md：<code>' + esc(skill.path) + "</code></div>"
+            : "") +
+          '<div class="row-grid">' +
+          '<label class="field"><span>自定义简介（模型可见；留空=自动）</span>' +
+          '<textarea data-field="description" rows="2" placeholder="' +
+          esc(skill.auto_intro || "") +
+          '">' +
+          esc(skill.overridden ? skill.intro : "") +
+          "</textarea></label>" +
+          '<label class="field"><span>其它</span>' +
+          '<label class="inline-check"><input type="checkbox" data-field="hidden"' +
+          (skill.hidden ? " checked" : "") +
+          " /> 隐藏此技能（不注入简介）</label></label>" +
+          "</div>" +
+          '<div class="actions">' +
+          '<button class="btn small primary" data-act="save-skill">保存</button>' +
+          '<button class="btn small ghost" data-act="reset-skill">恢复自动</button>' +
+          "</div>" +
+          "</div></div>"
+        );
+      })
+      .join("");
+  }
+
   function renderAll() {
     renderChips();
     renderStats();
@@ -465,6 +593,7 @@
     renderGroups();
     renderHiddenGroups();
     renderTools();
+    renderSkills();
     renderSessions();
     renderHistory();
   }
@@ -584,12 +713,35 @@
     }
   }
 
+  async function handleSkillAction(act, row) {
+    var name = row.getAttribute("data-skill");
+    if (!name) return;
+    if (act === "save-skill") {
+      var desc = $('[data-field="description"]', row);
+      var hidden = $('[data-field="hidden"]', row);
+      var patch = {};
+      if (desc) patch.description = desc.value.trim();
+      if (hidden) patch.hidden = !!hidden.checked;
+      var payload = { skill_updates: {} };
+      payload.skill_updates[name] = patch;
+      await apiPost("overrides", payload);
+      toast("已保存技能 " + name);
+      await loadState();
+      return;
+    }
+    if (act === "reset-skill") {
+      await apiPost("overrides", { reset_skill_names: [name] });
+      toast("已恢复技能 " + name + " 的自动简介");
+      await loadState();
+    }
+  }
+
   function activateTab(name) {
     activeTab = name;
     $$(".tab").forEach(function (tab) {
       tab.classList.toggle("active", tab.getAttribute("data-tab") === name);
     });
-    ["overview", "groups", "tools", "sessions"].forEach(function (panelName) {
+    ["overview", "groups", "tools", "skills", "sessions"].forEach(function (panelName) {
       var panel = $("#panel-" + panelName);
       if (panel) panel.classList.toggle("hidden", panelName !== name);
     });
@@ -611,6 +763,17 @@
       save.addEventListener("click", async function () {
         try {
           await saveConfigPatch(collectConfig(), "设置已保存，下一轮请求生效");
+        } catch (err) {
+          toast("保存失败：" + err.message, true);
+        }
+      });
+    }
+
+    var saveSkills = $("#btn-save-skills-config");
+    if (saveSkills) {
+      saveSkills.addEventListener("click", async function () {
+        try {
+          await saveConfigPatch(collectConfig(), "技能设置已保存，下一轮请求生效");
         } catch (err) {
           toast("保存失败：" + err.message, true);
         }
@@ -720,11 +883,16 @@
       if (!btn) return;
       var act = btn.getAttribute("data-act");
       var toolRow = btn.closest("[data-tool]");
+      var skillRow = btn.closest("[data-skill]");
       var groupRow = btn.closest("[data-group]");
       var hiddenGroupRow = btn.closest("[data-hidden-group]");
       try {
         if (toolRow) {
           await handleToolAction(act, toolRow);
+          return;
+        }
+        if (skillRow) {
+          await handleSkillAction(act, skillRow);
           return;
         }
         if (hiddenGroupRow) {

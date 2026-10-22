@@ -2,8 +2,8 @@
 
 所有可调参数都存在插件自己的数据目录里：
 
-- ``config.json``    —— 注入开关、常驻组、上限、自动预加载等
-- ``overrides.json`` —— 组说明 / 工具说明 / 工具归组 / 隐藏 等颗粒度覆盖
+- ``config.json``    —— 注入开关、常驻组、上限、自动预加载、技能段压缩参数等
+- ``overrides.json`` —— 组说明 / 工具说明 / 工具归组 / 隐藏 / 技能简介 等颗粒度覆盖
 
 AstrBot 的插件配置 schema 只保留一个 ``enabled`` 总开关，其余都在插件页
 （``pages/dashboard``）里编辑；这样参数变更不需要重启或重载插件。
@@ -34,12 +34,18 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "auto_load_max_groups": 1,
     "session_ttl_seconds": 0,
     "debug_log": True,
+    # 技能（AstrBot `## Skills` 段）按需压缩
+    "skills_enabled": True,
+    "skill_desc_max_chars": 50,
+    "skill_group_root": True,
+    "skill_compress_rules": True,
 }
 
 OVERRIDES_DEFAULTS: dict[str, Any] = {
     "version": 1,
     "groups": {},  # group_id -> {"name": str, "description": str, "hidden": bool}
     "tools": {},  # tool_name -> {"group": str, "description": str, "hidden": bool}
+    "skills": {},  # skill_name -> {"description": str, "hidden": bool}
     "group_order": [],  # 可选：页面排序用
 }
 
@@ -147,6 +153,10 @@ def normalize_config(raw: Any) -> dict[str, Any]:
         "auto_load_max_groups": as_int("auto_load_max_groups", 0, 8),
         "session_ttl_seconds": as_int("session_ttl_seconds", 0, 30 * 24 * 3600),
         "debug_log": as_bool("debug_log"),
+        "skills_enabled": as_bool("skills_enabled"),
+        "skill_desc_max_chars": as_int("skill_desc_max_chars", 10, 500),
+        "skill_group_root": as_bool("skill_group_root"),
+        "skill_compress_rules": as_bool("skill_compress_rules"),
     }
 
 
@@ -219,10 +229,27 @@ def normalize_overrides(raw: Any) -> dict[str, Any]:
             if text and text not in order:
                 order.append(text)
 
+    skills: dict[str, dict[str, Any]] = {}
+    raw_skills = source.get("skills")
+    if isinstance(raw_skills, dict):
+        for skill_name, item in raw_skills.items():
+            name = str(skill_name).strip()
+            if not name or not isinstance(item, dict):
+                continue
+            entry: dict[str, Any] = {}
+            description = _clean_text(item.get("description"), 1000)
+            if description:
+                entry["description"] = description
+            if item.get("hidden"):
+                entry["hidden"] = True
+            if entry:
+                skills[name] = entry
+
     out: dict[str, Any] = {
         "version": 1,
         "groups": groups,
         "tools": tools,
+        "skills": skills,
         "group_order": order,
     }
     updated_at = source.get("updated_at")

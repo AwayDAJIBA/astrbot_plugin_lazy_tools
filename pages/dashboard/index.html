@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>工具组管理</title>
-    <link rel="stylesheet" href="style.css?v=3" />
+    <link rel="stylesheet" href="style.css?v=4" />
     <script src="/api/plugin/page/bridge-sdk.js"></script>
   </head>
   <body>
@@ -27,6 +27,7 @@
         <button class="tab active" data-tab="overview">总览 / 设置</button>
         <button class="tab" data-tab="groups">工具组</button>
         <button class="tab" data-tab="tools">工具明细</button>
+        <button class="tab" data-tab="skills">技能</button>
         <button class="tab" data-tab="sessions">会话</button>
       </nav>
 
@@ -125,6 +126,42 @@
           <div id="tools-list" class="list"></div>
         </section>
 
+        <section class="panel hidden" id="panel-skills">
+          <div class="panel-head">
+            <h2>技能</h2>
+            <span class="muted">把 AstrBot 的 Skills 段压成「名字 + 一句简介 + 路径」，并可自定义每个技能的简介或隐藏。SKILL.md 全文不变，模型要用时自己去读。</span>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h2>技能段设置</h2>
+              <span class="muted">保存后下一轮请求生效</span>
+            </div>
+            <div class="form-grid">
+              <label class="field">
+                <span>启用技能段压缩</span>
+                <input type="checkbox" id="cfg-skills-enabled" />
+              </label>
+              <label class="field">
+                <span>简介截断长度（字符）</span>
+                <input type="number" id="cfg-skill-desc-max" min="10" max="500" />
+              </label>
+              <label class="field">
+                <span>路径按技能根目录合并</span>
+                <input type="checkbox" id="cfg-skill-group-root" />
+              </label>
+              <label class="field">
+                <span>精简技能规则</span>
+                <input type="checkbox" id="cfg-skill-compress-rules" />
+              </label>
+            </div>
+            <div class="actions">
+              <button class="btn primary" id="btn-save-skills-config">保存技能设置</button>
+            </div>
+          </div>
+          <div id="skill-stats" class="hint-box">还没有技能压缩记录，发一条会触发 LLM 的消息后再看。</div>
+          <div id="skills-list" class="list"></div>
+        </section>
+
         <section class="panel hidden" id="panel-sessions">
           <div class="panel-head">
             <h2>会话</h2>
@@ -140,6 +177,6 @@
 
       <div id="toast" class="toast hidden"></div>
     </div>
-    <script src="app.js?v=3"></script>
+    <script src="app.js?v=4"></script>
   </body>
 </html>

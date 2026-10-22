@@ -1,13 +1,14 @@
 name: astrbot_plugin_lazy_tools
 display_name: 工具按需注入 (Lazy Tools)
-short_desc: 工具分组按需注入，省 token 提缓存命中；插件页可调组说明/工具说明/归组/常驻
+short_desc: 工具分组按需注入 + 技能段压缩，省 token 提缓存命中；插件页可调组说明/工具说明/技能简介/归组/常驻
 desc: >-
   把 AstrBot 每次请求都要携带的全部工具定义改成“按需注入”：默认只下发
   astrbot_find_tools / astrbot_load_tools / astrbot_unload_tools 三个元工具和少量常驻工具，
   其余工具按插件/能力自动分组隐藏；模型需要时先搜索再加载，加载后下一步直接可用。
   已加载组按会话记忆，工具块跨轮稳定，利于前缀缓存。插件自带管理页，可调整组显示名、
   组说明、每个工具的说明、工具归组、隐藏工具/组、常驻组、注入上限、自动预加载等。
-version: v1.0.0
+  还支持技能（AstrBot Skills）按需压缩：把每轮的 Skills 段从「完整描述+绝对路径+七条规则」压成「技能名+一句简介+路径」，并可自定义每个技能的简介或隐藏技能。
+version: v1.1.0
 author: AwayDAJIBA
 repo: https://github.com/AwayDAJIBA/astrbot_plugin_lazy_tools
 astrbot_version: ">=4.25.5"

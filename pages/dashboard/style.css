@@ -164,6 +164,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .tool-auto-desc { color: var(--muted); font-size: 12px; flex: 1 1 260px; }
 .row-body > .tool-auto-desc { flex: 0 0 auto; }
+.skill-path {
+  background: var(--panel-2); border: 1px dashed var(--border); border-radius: 8px;
+  padding: 6px 10px;
+}
+.skill-path code { word-break: break-all; font-size: 12px; }
+#skill-stats { margin-bottom: 4px; }
 .badge {
   display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px;
   background: var(--primary-weak); color: var(--primary); border: 1px solid transparent;

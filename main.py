@@ -20,12 +20,13 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, StarTools, register
 
+from .lazy_tools.config import load_config, load_overrides, save_config
 from .lazy_tools.runtime import LazyToolsRuntime
 from .lazy_tools.web_api import register_routes
 
 PLUGIN_NAME = "astrbot_plugin_lazy_tools"
 PLUGIN_DESC = "工具分组按需注入：省 token、提缓存命中，并可在插件页管理组说明/工具说明"
-PLUGIN_VERSION = "v1.0.0"
+PLUGIN_VERSION = "v1.1.0"
 
 _COMMAND_ALIASES = {"状态": "status", "分组": "groups", "组": "groups"}
 
@@ -103,23 +104,68 @@ class LazyToolsPlugin(Star):
             "Lazy Tools 状态",
             f"- 开关: {'开' if cfg.get('enabled') else '关'} | 模式: {cfg.get('mode')}",
             f"- 常驻组: {', '.join(cfg.get('pin_groups') or []) or '(无)'}",
+            f"- 技能段压缩: {'开' if cfg.get('skills_enabled') else '关'}",
         ]
         if last:
-            lines.append(
-                "- 上次请求: {injected}/{full} 工具，schema ≈{before}→{after} tokens（−{pct}%）".format(
-                    injected=last.get("injected_tools", "?"),
-                    full=last.get("full_tools", "?"),
-                    before=last.get("full_tokens", "?"),
-                    after=last.get("injected_tokens", "?"),
-                    pct=last.get("saved_percent", "?"),
+            if last.get("tools_applied", True):
+                lines.append(
+                    "- 上次请求: {injected}/{full} 工具，schema ≈{before}→{after} tokens（−{pct}%）".format(
+                        injected=last.get("injected_tools", "?"),
+                        full=last.get("full_tools", "?"),
+                        before=last.get("full_tokens", "?"),
+                        after=last.get("injected_tokens", "?"),
+                        pct=last.get("saved_percent", "?"),
+                    )
                 )
-            )
-            lines.append(
-                "- 上次加载组: " + (", ".join(last.get("active_groups") or []) or "(无)")
-            )
+                lines.append(
+                    "- 上次加载组: "
+                    + (", ".join(last.get("active_groups") or []) or "(无)")
+                )
+            if last.get("skills_applied"):
+                lines.append(
+                    "- 上次技能段: {count} 个技能，{before}→{after} 字符（省 {saved}）".format(
+                        count=last.get("skills_count", 0),
+                        before=last.get("skills_before_chars", 0),
+                        after=last.get("skills_after_chars", 0),
+                        saved=last.get("skills_saved_chars", 0),
+                    )
+                )
         else:
             lines.append("- 本次进程还没有注入记录（发一条会触发 LLM 的消息即可）")
         lines.append(f"- 会话缓存: {len(self.runtime.sessions_snapshot())} 个")
+        return "\n".join(lines)
+
+    def _skills_text(self) -> str:
+        snapshot = self.runtime.snapshot()
+        skills = snapshot.get("skills") or []
+        if not skills:
+            return "当前没有发现技能（或 AstrBot 技能目录为空）。"
+        lines = [f"技能（{len(skills)}）："]
+        for skill in skills:
+            flags: list[str] = []
+            if not skill.get("active", True):
+                flags.append("未启用")
+            if skill.get("hidden"):
+                flags.append("已隐藏")
+            if skill.get("overridden"):
+                flags.append("自定义简介")
+            if skill.get("missing"):
+                flags.append("已不存在")
+            suffix = (" [" + ", ".join(flags) + "]") if flags else ""
+            lines.append(f"- {skill['name']}{suffix}: {skill.get('intro') or ''}")
+        stats = snapshot.get("skill_stats") or {}
+        if stats.get("applied"):
+            lines.append(
+                "上次压缩: {before} → {after} 字符（省 {saved}）".format(
+                    before=stats.get("before_chars", 0),
+                    after=stats.get("after_chars", 0),
+                    saved=max(
+                        0,
+                        int(stats.get("before_chars") or 0)
+                        - int(stats.get("after_chars") or 0),
+                    ),
+                )
+            )
         return "\n".join(lines)
 
     def _groups_text(self) -> str:
@@ -141,7 +187,7 @@ class LazyToolsPlugin(Star):
 
     @filter.command("lazy")
     async def cmd_lazy(self, event: AstrMessageEvent):
-        """工具注入管理：/lazy [status|groups|on|off|pin|unpin|desc|tooldesc|reset]"""
+        """工具注入管理：/lazy [status|groups|skills|on|off|pin|unpin|desc|tooldesc|skilldesc|skillhide|skillshow|skillreset|reset]"""
         try:
             args = _split_command_args(event)
             sub = args[0] if args else "status"
@@ -150,6 +196,9 @@ class LazyToolsPlugin(Star):
                 return
             if sub == "groups":
                 yield event.plain_result(self._groups_text())
+                return
+            if sub == "skills":
+                yield event.plain_result(self._skills_text())
                 return
             if not self._is_admin(event):
                 yield event.plain_result("这个操作需要管理员权限喵。")
@@ -193,13 +242,46 @@ class LazyToolsPlugin(Star):
                     )
                 yield event.plain_result(f"已更新 {target} 的说明（下一轮生效）。")
                 return
+            if sub in {"skilldesc", "skillhide", "skillshow", "skillreset"}:
+                if len(args) < 2:
+                    yield event.plain_result(
+                        "用法: /lazy skilldesc <技能名> <说明> | skillhide <技能名> | "
+                        "skillshow <技能名> | skillreset <技能名>"
+                    )
+                    return
+                skill_name = args[1]
+                if sub == "skilldesc":
+                    if len(args) < 3:
+                        yield event.plain_result("用法: /lazy skilldesc <技能名> <说明>")
+                        return
+                    text = " ".join(args[2:])
+                    self.runtime.update_overrides(
+                        {"skill_updates": {skill_name: {"description": text}}}
+                    )
+                    yield event.plain_result(
+                        f"已更新技能 {skill_name} 的自定义简介（下一轮生效）。"
+                    )
+                    return
+                if sub in {"skillhide", "skillshow"}:
+                    self.runtime.update_overrides(
+                        {"skill_updates": {skill_name: {"hidden": sub == "skillhide"}}}
+                    )
+                    yield event.plain_result(
+                        ("已隐藏技能: " if sub == "skillhide" else "已恢复技能: ")
+                        + skill_name
+                    )
+                    return
+                self.runtime.update_overrides({"reset_skill_names": [skill_name]})
+                yield event.plain_result(f"已恢复技能 {skill_name} 的自动简介/显示状态。")
+                return
             if sub == "reset":
                 count = self.runtime.reset_sessions()
                 yield event.plain_result(f"已清空 {count} 个会话的已加载工具组记忆。")
                 return
             yield event.plain_result(
-                "用法: /lazy [status|groups|on|off|pin <组>|unpin <组>|"
-                "desc <组> <说明>|tooldesc <工具> <说明>|reset]"
+                "用法: /lazy [status|groups|skills|on|off|pin <组>|unpin <组>|"
+                "desc <组> <说明>|tooldesc <工具> <说明>|skilldesc <技能> <说明>|"
+                "skillhide <技能>|skillshow <技能>|skillreset <技能>|reset]"
             )
         except Exception as exc:  # noqa: BLE001
             self.logger.warning("[lazy-tools] 命令处理失败: %s", exc, exc_info=True)

@@ -10,6 +10,7 @@ lazy_tools/
   config.py               config.json / overrides.json 的读写、归一化、导入导出
   catalog.py              工具分类、分组、说明覆盖、token 估算、关键词索引
   runtime.py              会话状态、注入控制器、元工具实现、请求改写、页面快照
+  skills.py               AstrBot Skills 段的解析、压缩与技能简介覆盖
   web_api.py              管理页接口（state/config/overrides/actions/export/import/reload）
 pages/dashboard/          管理页（原生 HTML/CSS/JS，通过 Plugin Page Bridge 与后端通信）
 ```
@@ -48,6 +49,33 @@ AstrBot LLM 请求
 - 工具说明覆盖通过 `copy.copy(tool)` 生成注入用的副本，**不修改全局工具对象**，因此权限校验、MCP 调用、handoff 等行为保持一致；
 - 覆盖项保存在 `overrides.json`，删除即恢复自动值。
 
+## 3.1 技能段（Skills）压缩
+
+AstrBot 的 `build_skills_prompt()` 会把当前可用技能拼成一段固定格式的 system prompt：
+
+```
+## Skills
+...（说明）...
+### Available skills
+- **<name>**: <完整 description>
+  File: `<绝对路径>`
+### Skill rules
+1. ...（七条英文规则）
+```
+
+插件在同一个 `on_llm_request` 里，对这段做按需压缩：
+
+- 解析出 `(name, description, path)`，按 `SKILL.md` 的父目录把技能分组；
+- 技能根目录只写一次，条目写成 `- name: 一句简介 → name/SKILL.md`；
+- 简介默认取第一句并截断到 `skill_desc_max_chars`（默认 50）；
+- 七条英文规则换成一段中文精简规则（可关闭，保留原规则）；
+- 支持 `overrides.skills.<name>`：`description` 覆盖简介、`hidden` 隐藏该技能；
+- 解析失败 / 段太短时原样放行，不会把技能弄丢。
+
+压缩只改注入的 system prompt，不修改 `SKILL.md`，也不改技能目录或 `skills.json`。
+
+实测（5 个技能）：Skills 段 **6,700 → 932 字符（约 −86%）**，并且自定义简介 / 隐藏技能会实时反映到下一轮请求。
+
 ## 4. 缓存行为实测
 
 DeepSeek / OpenAI 兼容接口的前缀缓存按序列化的 token 前缀匹配，工具 schema 通常位于消息之前，属于前缀的一部分。
@@ -77,6 +105,7 @@ DeepSeek / OpenAI 兼容接口的前缀缓存按序列化的 token 前缀匹配�
 - 一次 Agent 运行内工具目录是快照；运行中新注册的工具在下一轮进入目录。
 - 运行中加载组超过上限时只做硬上限保护（上限 + 8），下一轮构建时再裁到上限。
 - 与 `tool_schema_mode=skills_like` 不兼容。
+- 技能段压缩依赖 AstrBot 现有的 `## Skills` 格式；AstrBot 大版本改变格式时解析失败会原样放行（不会丢技能），届时更新解析规则即可。
 
 后续可做：
 
