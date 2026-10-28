@@ -2,7 +2,7 @@
 
 **工具按需注入（Lazy Tools）· 一个把 AstrBot 工具 schema 改成“按需下发”的插件**
 
-![version](https://img.shields.io/badge/version-v1.1.0-blue)
+![version](https://img.shields.io/badge/version-v1.1.1-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.25.5-6f42c1)
 ![python](https://img.shields.io/badge/python-3.10%2B-3776ab)
@@ -44,6 +44,7 @@ AstrBot 默认会在**每一次** LLM 请求里带上**全部工具**的定义�
   - `astrbot_load_tools`：按组或按工具加载，下一步直接可用
   - `astrbot_unload_tools`：卸载不再需要的组/工具
 - **自动分组**：内置能力组（files / shell / web / knowledge / messaging / tasks / memory / sessions / subagents 等）、每个插件一组、每个 MCP server 一组、来源不明时按名字兜底
+- **插件内部工具检索防误用**：自动识别插件自带的二级工具检索工具（例如 qzone_tools 的 `search_wyc_tools` / `call_wyc_tools`），给注入描述追加“这是插件内部索引、不是全局工具目录”的提示，并在系统提示词里点名；`astrbot_find_tools` 的结果也会强调自己是唯一全局目录。可在“总览 / 设置”里关闭。
 - **技能段按需压缩**：把 AstrBot 的 Skills 段压成「名字 + 一句简介 + 路径」，支持**自定义每个技能的简介**、隐藏技能、调整截断长度 / 是否合并根目录 / 是否精简规则；SKILL.md 全文不变
 - **管理页**（插件详情 → 页面 → 工具组管理）
   - 总览：开关、lazy/full 模式、常驻组/工具、上限、记忆 TTL、自动预加载、请求日志、最近请求统计、导入导出

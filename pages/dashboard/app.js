@@ -253,6 +253,10 @@
     setValue("#cfg-auto-load", cfg.auto_load);
     setValue("#cfg-auto-load-max", cfg.auto_load_max_groups);
     setValue("#cfg-debug", cfg.debug_log);
+    setValue(
+      "#cfg-annotate-tool-managers",
+      cfg.annotate_nested_tool_managers !== false
+    );
     setValue("#cfg-pin-groups", (cfg.pin_groups || []).join("\n"));
     setValue("#cfg-pin-tools", (cfg.pin_tools || []).join("\n"));
     setValue("#cfg-skills-enabled", cfg.skills_enabled);
@@ -274,6 +278,7 @@
       auto_load: getChecked("#cfg-auto-load"),
       auto_load_max_groups: Number(getValue("#cfg-auto-load-max")) || 0,
       debug_log: getChecked("#cfg-debug"),
+      annotate_nested_tool_managers: getChecked("#cfg-annotate-tool-managers"),
       skills_enabled: getChecked("#cfg-skills-enabled"),
       skill_desc_max_chars: Number(getValue("#cfg-skill-desc-max")) || 50,
       skill_group_root: getChecked("#cfg-skill-group-root"),

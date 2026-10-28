@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>工具组管理</title>
-    <link rel="stylesheet" href="style.css?v=4" />
+    <link rel="stylesheet" href="style.css?v=5" />
     <script src="/api/plugin/page/bridge-sdk.js"></script>
   </head>
   <body>
@@ -81,6 +81,10 @@
               <label class="field">
                 <span>请求日志</span>
                 <input type="checkbox" id="cfg-debug" />
+              </label>
+              <label class="field">
+                <span>给插件内部工具检索加提示（防止误当全局工具搜索）</span>
+                <input type="checkbox" id="cfg-annotate-tool-managers" />
               </label>
             </div>
             <label class="field">
@@ -177,6 +181,6 @@
 
       <div id="toast" class="toast hidden"></div>
     </div>
-    <script src="app.js?v=4"></script>
+    <script src="app.js?v=5"></script>
   </body>
 </html>

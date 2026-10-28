@@ -34,6 +34,8 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "auto_load_max_groups": 1,
     "session_ttl_seconds": 0,
     "debug_log": True,
+    # 给插件自带的「二级工具检索/列表」工具补一句“不是全局工具目录”的提示
+    "annotate_nested_tool_managers": True,
     # 技能（AstrBot `## Skills` 段）按需压缩
     "skills_enabled": True,
     "skill_desc_max_chars": 50,
@@ -153,6 +155,7 @@ def normalize_config(raw: Any) -> dict[str, Any]:
         "auto_load_max_groups": as_int("auto_load_max_groups", 0, 8),
         "session_ttl_seconds": as_int("session_ttl_seconds", 0, 30 * 24 * 3600),
         "debug_log": as_bool("debug_log"),
+        "annotate_nested_tool_managers": as_bool("annotate_nested_tool_managers"),
         "skills_enabled": as_bool("skills_enabled"),
         "skill_desc_max_chars": as_int("skill_desc_max_chars", 10, 500),
         "skill_group_root": as_bool("skill_group_root"),

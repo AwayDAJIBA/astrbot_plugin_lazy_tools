@@ -26,7 +26,7 @@ from .lazy_tools.web_api import register_routes
 
 PLUGIN_NAME = "astrbot_plugin_lazy_tools"
 PLUGIN_DESC = "工具分组按需注入：省 token、提缓存命中，并可在插件页管理组说明/工具说明"
-PLUGIN_VERSION = "v1.1.0"
+PLUGIN_VERSION = "v1.1.1"
 
 _COMMAND_ALIASES = {"状态": "status", "分组": "groups", "组": "groups"}
 

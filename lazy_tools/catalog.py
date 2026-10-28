@@ -434,6 +434,53 @@ def _apply_description_override(tool: FunctionTool, description: str) -> Functio
         return tool
 
 
+# 有些插件会自带「插件内部的二级工具检索/列表」工具（例如 qzone_tools 的
+# search_wyc_tools / call_wyc_tools）。开启按需注入后，模型容易把它们误当成
+# AstrBot 的全局工具目录，查不到东西就直接放弃。这里在注入副本上补一句说明，
+# 只改本轮注入的说明文案，不改插件原工具对象。
+NESTED_TOOL_MANAGER_NOTE = (
+    "（注：这是本插件内部的二级工具检索/列表，不是 AstrBot 全局工具目录；"
+    "要查全局工具请调用 astrbot_find_tools）"
+)
+
+_TOOL_SEARCH_VERBS_RE = re.compile(r"(search|find|list|call|query|discover)")
+_TOOL_WORD_RE = re.compile(r"tools?|toolset")
+
+
+def looks_like_nested_tool_manager(tool: FunctionTool) -> bool:
+    """判断工具是否像「插件内部工具检索/列表」工具。"""
+    name = str(getattr(tool, "name", "") or "").lower()
+    if not name or not _TOOL_WORD_RE.search(name):
+        return False
+    if not _TOOL_SEARCH_VERBS_RE.search(name):
+        return False
+    description = str(getattr(tool, "description", "") or "")
+    if not description:
+        return True
+    lowered = description.lower()
+    if "工具" in description:
+        return True
+    if "tool" in lowered and any(
+        keyword in lowered
+        for keyword in ("search", "find", "list", "index", "discover", "catalog")
+    ):
+        return True
+    return False
+
+
+def annotate_nested_tool_manager(tool: FunctionTool) -> FunctionTool:
+    """返回带「不是全局工具目录」提示的注入副本。"""
+    base = clean_one_line(getattr(tool, "description", "") or "", limit=1000)
+    if not base:
+        base = "(plugin-local tool index)"
+    if NESTED_TOOL_MANAGER_NOTE in base:
+        return tool
+    limit = 1000 - len(NESTED_TOOL_MANAGER_NOTE)
+    if len(base) > limit:
+        base = base[:limit].rstrip()
+    return _apply_description_override(tool, base + NESTED_TOOL_MANAGER_NOTE)
+
+
 def build_catalog(
     full_tool_set: ToolSet,
     overrides: dict[str, Any] | None = None,

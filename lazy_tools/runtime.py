@@ -19,11 +19,13 @@ from .catalog import (
     META_UNLOAD_TOOLS,
     Catalog,
     ToolGroup,
+    annotate_nested_tool_manager,
     build_catalog,
     build_keyword_index,
     clean_one_line,
     estimate_full_tool_set_tokens,
     estimate_tool_set_tokens,
+    looks_like_nested_tool_manager,
 )
 from .config import (
     CONFIG_DEFAULTS,
@@ -50,12 +52,34 @@ LAZY_TOOL_CALL_PROMPT = (
     "their real schemas; do not call a tool before enabling it and do not invent "
     "tool names or parameters. "
     "`astrbot_unload_tools` disables tools that are no longer needed. "
+    "Only `astrbot_find_tools` is the authoritative global tool catalog. Some plugins "
+    "ship their own tool-search or tool-list tools (names like search_*_tools, "
+    "call_*_tools, list_*_tools, or descriptions saying they list/search available "
+    "tools). Those only cover that plugin's own sub-tools: never use them to discover "
+    "global tools, and never conclude that a capability is unavailable based on their "
+    "results. If a search returns nothing, retry with broader or different keywords "
+    "(Chinese and English) or call astrbot_find_tools with no arguments to list all "
+    "groups before giving up or telling the user it is unsupported. "
     "Never return an empty response; briefly explain the purpose when starting a "
     "new type of task, but not before every tool call; keep the conversation "
     "style consistent."
 )
 
 _META_NAME_SET = META_NAME_SET
+
+_AUTHORITATIVE_CATALOG_HINT = (
+    "This is the authoritative AstrBot global tool catalog. Plugin-local tool "
+    "indexes (e.g. search_*_tools, call_*_tools, list_*_tools) only cover that "
+    "plugin's own sub-tools; never use them for global discovery, and do not "
+    "conclude a capability is missing from their results.\n"
+)
+
+_NESTED_TOOL_MANAGER_PROMPT_NOTE = (
+    "\n\nNote: these enabled tools are plugin-local sub-tool indexes, NOT the "
+    "AstrBot global catalog: {names}. Never use them to discover global tools or "
+    "to decide a capability is missing; always use `astrbot_find_tools` for global "
+    "tool discovery."
+)
 
 _ACTION_SPLIT_RE = re.compile(r"[\s,，、;/|]+")
 _MAX_TRACKED_SESSIONS = 512
@@ -124,6 +148,11 @@ class LazyToolsController:
         self.log = logger_ or logger
         self._on_change = on_change
         self.injected = ToolSet()
+        self.annotate_tool_managers = bool(
+            config.get("annotate_nested_tool_managers", True)
+        )
+        self._annotated_names_logged: set[str] = set()
+        self.nested_tool_manager_names: list[str] = []
 
         self.meta_tools: list[FunctionTool] = []
         self.active_groups: list[str] = []
@@ -240,13 +269,34 @@ class LazyToolsController:
     def refresh_injected(self) -> None:
         """重新渲染注入集合（保持 ToolSet 对象身份，供 runner 下一步直接读取）。"""
         tool_set = ToolSet()
+        self.nested_tool_manager_names = []
         for meta_tool in self.meta_tools:
             tool_set.add_tool(meta_tool)
         for name in self._active_tool_names():
             tool = self.catalog.by_name.get(name)
-            if tool is not None:
-                tool_set.add_tool(tool)
+            if tool is None:
+                continue
+            if self.annotate_tool_managers and self._looks_like_plugin_tool_manager(
+                name
+            ):
+                tool = annotate_nested_tool_manager(tool)
+                self.nested_tool_manager_names.append(name)
+                if name not in self._annotated_names_logged:
+                    self._annotated_names_logged.add(name)
+                    self.log.debug(
+                        "[lazy-tools] annotated plugin-local tool index: %s", name
+                    )
+            tool_set.add_tool(tool)
         self.injected.tools = tool_set.tools
+
+    def _looks_like_plugin_tool_manager(self, tool_name: str) -> bool:
+        """只给插件/MCP 组里的二级工具检索工具加提示，内置组不动。"""
+        group_id = self.catalog.tool_to_group.get(tool_name, "")
+        group = self.catalog.groups.get(group_id)
+        if group is not None and group.kind == "builtin":
+            return False
+        tool = self.catalog.by_name.get(tool_name)
+        return bool(tool is not None and looks_like_nested_tool_manager(tool))
 
     def stats(self) -> dict[str, Any]:
         injected_tokens = estimate_tool_set_tokens(self.injected)
@@ -289,6 +339,8 @@ class LazyToolsController:
         if active_names is None:
             active_names = set(self._active_tool_names())
         marker = " [loaded]" if tool.name in active_names else ""
+        if self._looks_like_plugin_tool_manager(tool.name):
+            marker += " [plugin-local tool index, not global tools]"
         description = clean_one_line(getattr(tool, "description", "") or "", 130)
         if not description:
             description = "(no description)"
@@ -338,7 +390,8 @@ class LazyToolsController:
             )
             lines = [self._render_group_line(gid) for gid in group_ids]
             header = (
-                f"Tool groups ({len(group_ids)} groups, {len(self.catalog.by_name)} tools). "
+                _AUTHORITATIVE_CATALOG_HINT
+                + f"Tool groups ({len(group_ids)} groups, {len(self.catalog.by_name)} tools). "
                 "Pass query=... to search tools, group=<id> to inspect a group. "
                 "Enable what you need with astrbot_load_tools; loaded/pinned groups "
                 "are already callable.\n"
@@ -378,8 +431,10 @@ class LazyToolsController:
         scored.sort(key=lambda item: (-item[0], item[1]))
         if not scored:
             return (
-                f"No tools matched '{query}'. Call astrbot_find_tools() without "
-                "arguments to list tool groups."
+                f"No tools matched '{query}'. Try broader or different keywords "
+                "(Chinese and English), or call astrbot_find_tools() without "
+                "arguments to list all tool groups before concluding the capability "
+                "does not exist. Do not rely on plugin-local tool-search tools.\n"
             )
         shown = scored[:limit]
         active_names = set(self._active_tool_names())
@@ -674,9 +729,12 @@ class LazyToolsController:
             FunctionTool(
                 name=META_FIND_TOOLS,
                 description=(
-                    "Discover tools without loading them. No arguments: list tool "
-                    "groups. query=...: search tools. group=...: list one group's "
-                    "tools. Load what you need with astrbot_load_tools."
+                    "The only authoritative AstrBot global tool catalog. Discover "
+                    "tools without loading them. No arguments: list tool groups. "
+                    "query=...: search tools. group=...: list one group's tools. "
+                    "Plugin-local tool-search/list tools (e.g. search_*_tools, "
+                    "call_*_tools) only cover their own plugin; never use them for "
+                    "global discovery. Load what you need with astrbot_load_tools."
                 ),
                 parameters=find_schema,
                 handler=find_tools,
@@ -1095,6 +1153,12 @@ class LazyToolsRuntime:
         )
         request.func_tool = controller.injected
         self._rewrite_prompt(request)
+        if controller.nested_tool_manager_names:
+            names = ", ".join(f"`{name}`" for name in controller.nested_tool_manager_names)
+            request.system_prompt = (
+                (getattr(request, "system_prompt", "") or "")
+                + _NESTED_TOOL_MANAGER_PROMPT_NOTE.format(names=names)
+            )
         try:
             event.set_extra("_lazy_tools_controller", controller)
         except Exception:
