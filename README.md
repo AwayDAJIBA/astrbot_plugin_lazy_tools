@@ -2,7 +2,7 @@
 
 **工具按需注入（Lazy Tools）· 一个把 AstrBot 工具 schema 改成“按需下发”的插件**
 
-![version](https://img.shields.io/badge/version-v1.1.1-blue)
+![version](https://img.shields.io/badge/version-v1.1.2-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.25.5-6f42c1)
 ![python](https://img.shields.io/badge/python-3.10%2B-3776ab)
@@ -49,7 +49,7 @@ AstrBot 默认会在**每一次** LLM 请求里带上**全部工具**的定义�
 - **管理页**（插件详情 → 页面 → 工具组管理）
   - 总览：开关、lazy/full 模式、常驻组/工具、上限、记忆 TTL、自动预加载、请求日志、最近请求统计、导入导出
   - 工具组：编辑**组显示名**、**组说明**（模型可见，用来告诉它这组一般干什么）、常驻、隐藏、恢复自动
-  - 工具明细：搜索过滤、编辑**每个工具的说明**、**重新归组**（可新建自定义组）、隐藏、恢复自动
+  - 工具明细：搜索过滤、编辑**每个工具的说明**（编辑框预填原说明，直接在原文上改；清空保存恢复自动）、**重新归组**（可新建自定义组）、隐藏、恢复自动
   - 技能：技能段压缩参数、逐个技能自定义简介 / 隐藏、上次压缩统计
   - 会话：查看每个会话已加载的组、一键清空记忆、重置覆盖项
 - **聊天命令**：`/lazy status|groups|skills|on|off|pin|unpin|desc|tooldesc|skilldesc|skillhide|skillshow|skillreset|reset`

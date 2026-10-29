@@ -10,6 +10,7 @@
   var activeTab = "overview";
   var toastTimer = null;
   var toolFilter = { search: "", group: "", showHidden: false };
+  var toolAutoDescriptions = {};
 
   function $(sel, root) {
     return (root || document).querySelector(sel);
@@ -390,6 +391,7 @@
     if (!el || !state) return;
     var groups = state.groups || [];
     var groupIds = groups.map(function (g) { return g.id; });
+    toolAutoDescriptions = {};
     if (filterSelect) {
       var current = toolFilter.group;
       filterSelect.innerHTML =
@@ -407,6 +409,7 @@
     groups.forEach(function (group) {
       (group.tools || []).forEach(function (tool) {
         var override = toolOverrides[tool.name] || {};
+        toolAutoDescriptions[tool.name] = tool.auto_description || "";
         rows.push({
           name: tool.name,
           autoGroup: group.id,
@@ -422,6 +425,7 @@
     // 隐藏/残留工具
     (state.hidden_tool_info || []).forEach(function (item) {
       var override = toolOverrides[item.name] || {};
+      toolAutoDescriptions[item.name] = item.auto_description || "";
       rows.push({
         name: item.name,
         autoGroup: "",
@@ -448,7 +452,7 @@
 
     var header =
       '<div class="hint-box">共 ' + fmtNum(rows.length) + " 个工具，" +
-      "当前显示 " + fmtNum(filtered.length) + " 个。工具说明修改只影响模型看到的注入版本。</div>";
+      "当前显示 " + fmtNum(filtered.length) + " 个。工具说明框里已填好原说明，直接在上面修改即可；保存后只影响注入版本，清空保存则恢复原说明。</div>";
     if (!filtered.length) {
       el.innerHTML = header + '<div class="hint-box">没有匹配的工具。</div>';
       return;
@@ -468,10 +472,12 @@
             badges +
             "</div>" +
             '<div class="row-body">' +
-            '<div class="tool-auto-desc">自动说明：' + esc(row.autoDescription || "(无)") + "</div>" +
+            '<div class="tool-auto-desc">原始说明：' + esc(row.autoDescription || "(无)") + "</div>" +
             '<div class="row-grid">' +
-            '<label class="field"><span>工具说明覆盖（留空=自动）</span>' +
-            '<textarea data-field="description" rows="2">' + esc(row.description || "") + "</textarea></label>" +
+            '<label class="field"><span>工具说明（已预填原说明，可直接修改；清空=自动）</span>' +
+            '<textarea data-field="description" rows="3">' +
+            esc(row.description || row.autoDescription || "") +
+            "</textarea></label>" +
             '<label class="field"><span>归组</span><select data-field="group">' +
             groupOptions(row.overrideGroup, groupIds.concat(state.hidden_groups || []), row.autoGroup) +
             "</select></label>" +
@@ -636,10 +642,16 @@
 
   function collectToolPatch(row) {
     var patch = {};
+    var toolName = row.getAttribute("data-tool") || "";
+    var autoDescription = (toolAutoDescriptions[toolName] || "").trim();
     var desc = $('[data-field="description"]', row);
     var group = $('[data-field="group"]', row);
     var hidden = $('[data-field="hidden"]', row);
-    if (desc) patch.description = desc.value.trim();
+    if (desc) {
+      var description = desc.value.trim();
+      // 说明框预填的是原说明；没改动或清空时不落覆盖项，避免无意义覆盖。
+      patch.description = description === autoDescription ? "" : description;
+    }
     if (group) {
       var value = group.value;
       if (value === "__custom__") {
