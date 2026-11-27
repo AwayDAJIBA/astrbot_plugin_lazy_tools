@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>工具组管理</title>
-    <link rel="stylesheet" href="style.css?v=6" />
+    <link rel="stylesheet" href="style.css?v=7" />
     <script src="/api/plugin/page/bridge-sdk.js"></script>
   </head>
   <body>
@@ -77,6 +77,10 @@
               <label class="field">
                 <span>自动预加载上限（组）</span>
                 <input type="number" id="cfg-auto-load-max" min="0" max="8" />
+              </label>
+              <label class="field">
+                <span>单工具组直接注入（组里只有 1 个工具时无需再加载）</span>
+                <input type="checkbox" id="cfg-single-tool-auto" />
               </label>
               <label class="field">
                 <span>请求日志</span>
@@ -181,6 +185,6 @@
 
       <div id="toast" class="toast hidden"></div>
     </div>
-    <script src="app.js?v=6"></script>
+    <script src="app.js?v=7"></script>
   </body>
 </html>

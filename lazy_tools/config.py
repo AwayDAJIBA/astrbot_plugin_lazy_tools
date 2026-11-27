@@ -32,6 +32,8 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "min_tools_for_lazy": 12,
     "auto_load": False,
     "auto_load_max_groups": 1,
+    # 单工具组直接注入：组里只有 1 个工具时不再走“先加载再调用”，省一轮
+    "auto_inject_single_tool_groups": True,
     "session_ttl_seconds": 0,
     "debug_log": True,
     # 给插件自带的「二级工具检索/列表」工具补一句“不是全局工具目录”的提示
@@ -153,6 +155,9 @@ def normalize_config(raw: Any) -> dict[str, Any]:
         "min_tools_for_lazy": as_int("min_tools_for_lazy", 0, 500),
         "auto_load": as_bool("auto_load"),
         "auto_load_max_groups": as_int("auto_load_max_groups", 0, 8),
+        "auto_inject_single_tool_groups": as_bool(
+            "auto_inject_single_tool_groups"
+        ),
         "session_ttl_seconds": as_int("session_ttl_seconds", 0, 30 * 24 * 3600),
         "debug_log": as_bool("debug_log"),
         "annotate_nested_tool_managers": as_bool("annotate_nested_tool_managers"),

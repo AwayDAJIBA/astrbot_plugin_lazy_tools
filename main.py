@@ -26,7 +26,7 @@ from .lazy_tools.web_api import register_routes
 
 PLUGIN_NAME = "astrbot_plugin_lazy_tools"
 PLUGIN_DESC = "工具分组按需注入：省 token、提缓存命中，并可在插件页管理组说明/工具说明"
-PLUGIN_VERSION = "v1.1.2"
+PLUGIN_VERSION = "v1.2.0"
 
 _COMMAND_ALIASES = {"状态": "status", "分组": "groups", "组": "groups"}
 
@@ -104,6 +104,7 @@ class LazyToolsPlugin(Star):
             "Lazy Tools 状态",
             f"- 开关: {'开' if cfg.get('enabled') else '关'} | 模式: {cfg.get('mode')}",
             f"- 常驻组: {', '.join(cfg.get('pin_groups') or []) or '(无)'}",
+            f"- 单工具组直接注入: {'开' if cfg.get('auto_inject_single_tool_groups', True) else '关'}",
             f"- 技能段压缩: {'开' if cfg.get('skills_enabled') else '关'}",
         ]
         if last:
@@ -121,6 +122,11 @@ class LazyToolsPlugin(Star):
                     "- 上次加载组: "
                     + (", ".join(last.get("active_groups") or []) or "(无)")
                 )
+                if last.get("auto_single_groups"):
+                    lines.append(
+                        "- 单工具组自动注入: "
+                        + ", ".join(last.get("auto_single_groups"))
+                    )
             if last.get("skills_applied"):
                 lines.append(
                     "- 上次技能段: {count} 个技能，{before}→{after} 字符（省 {saved}）".format(
@@ -175,7 +181,12 @@ class LazyToolsPlugin(Star):
             return "当前没有可用的工具组（工具集为空，或全部被隐藏）。"
         lines = [f"工具组（{len(groups)}）："]
         for group in groups:
-            marker = " [常驻]" if group.get("pinned") else ""
+            flags: list[str] = []
+            if group.get("pinned"):
+                flags.append("常驻")
+            if group.get("auto_single"):
+                flags.append("单工具直接注入")
+            marker = (" [" + ", ".join(flags) + "]") if flags else ""
             lines.append(
                 f"- {group['id']} ({group.get('tool_count', 0)} 工具){marker}: "
                 f"{group.get('description') or ''}"

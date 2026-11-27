@@ -253,6 +253,10 @@
     setValue("#cfg-ttl", cfg.session_ttl_seconds);
     setValue("#cfg-auto-load", cfg.auto_load);
     setValue("#cfg-auto-load-max", cfg.auto_load_max_groups);
+    setValue(
+      "#cfg-single-tool-auto",
+      cfg.auto_inject_single_tool_groups !== false
+    );
     setValue("#cfg-debug", cfg.debug_log);
     setValue(
       "#cfg-annotate-tool-managers",
@@ -278,6 +282,7 @@
       session_ttl_seconds: Number(getValue("#cfg-ttl")) || 0,
       auto_load: getChecked("#cfg-auto-load"),
       auto_load_max_groups: Number(getValue("#cfg-auto-load-max")) || 0,
+      auto_inject_single_tool_groups: getChecked("#cfg-single-tool-auto"),
       debug_log: getChecked("#cfg-debug"),
       annotate_nested_tool_managers: getChecked("#cfg-annotate-tool-managers"),
       skills_enabled: getChecked("#cfg-skills-enabled"),
@@ -299,6 +304,7 @@
       .map(function (group) {
         var overrides = (state.group_overrides || {})[group.id] || {};
         var pinned = (state.pinned_groups || []).indexOf(group.id) >= 0;
+        var autoSingle = !!group.auto_single;
         var toolLines = (group.tools || [])
           .map(function (tool) {
             return (
@@ -316,6 +322,7 @@
           '<span class="badge">' + fmtNum(group.tool_count) + " 工具</span>" +
           '<span class="badge muted">' + esc(group.kind || "") + "</span>" +
           (pinned ? '<span class="badge">常驻</span>' : "") +
+          (autoSingle ? '<span class="badge">单工具直接注入</span>' : "") +
           '<div class="tag-actions">' +
           '<button class="btn small ghost" data-act="pin">' + (pinned ? "取消常驻" : "设为常驻") + "</button>" +
           '<button class="btn small primary" data-act="save-group">保存</button>' +

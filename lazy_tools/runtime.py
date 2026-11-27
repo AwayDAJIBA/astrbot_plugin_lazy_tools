@@ -212,6 +212,26 @@ class LazyToolsController:
             restored_tools = restored_tools[-max_tools:]
         self.active_tools = restored_tools
 
+    def _auto_single_groups(self) -> list[str]:
+        """返回因“组里只有 1 个工具”而直接注入的组 id。"""
+        if not bool(
+            self.config.get("auto_inject_single_tool_groups", True)
+        ):
+            return []
+        used = set(self.active_groups) | set(self.pinned_groups)
+        group_ids = [
+            group_id
+            for group_id, group in self.catalog.groups.items()
+            if len(group.tools) == 1 and group_id not in used
+        ]
+        group_ids.sort(
+            key=lambda group_id: (
+                self.catalog.groups[group_id].priority,
+                group_id,
+            )
+        )
+        return group_ids
+
     def _persist(self) -> None:
         self.session.groups = list(self.active_groups)
         self.session.tools = list(self.active_tools)
@@ -262,6 +282,12 @@ class LazyToolsController:
             if group is not None:
                 for tool in group.tools:
                     add(tool.name)
+        # 单工具组默认直接注入：不需要先 load，避免为一两个工具多绕一轮。
+        for group_id in self._auto_single_groups():
+            group = self.catalog.groups.get(group_id)
+            if group is not None:
+                for tool in group.tools:
+                    add(tool.name)
         for name in [*self.pinned_tools, *sorted(self.active_tools)]:
             add(name)
         return names
@@ -283,9 +309,12 @@ class LazyToolsController:
                 self.nested_tool_manager_names.append(name)
                 if name not in self._annotated_names_logged:
                     self._annotated_names_logged.add(name)
-                    self.log.debug(
-                        "[lazy-tools] annotated plugin-local tool index: %s", name
-                    )
+                    debug = getattr(self.log, "debug", None)
+                    if debug is not None:
+                        debug(
+                            "[lazy-tools] annotated plugin-local tool index: %s",
+                            name,
+                        )
             tool_set.add_tool(tool)
         self.injected.tools = tool_set.tools
 
@@ -303,6 +332,17 @@ class LazyToolsController:
         full_tokens = estimate_full_tool_set_tokens(self.full_tool_set)
         saved = max(0, full_tokens - injected_tokens)
         percent = (saved * 100.0 / full_tokens) if full_tokens else 0.0
+        auto_single_groups = self._auto_single_groups()
+        auto_single_tools = [
+            group.tools[0].name
+            for group in (self.catalog.groups.get(gid) for gid in auto_single_groups)
+            if group is not None and group.tools
+        ]
+        active_groups = sorted(
+            set(self.active_groups)
+            | set(self.pinned_groups)
+            | set(auto_single_groups)
+        )
         return {
             "injected_tools": len(self.injected.tools),
             "full_tools": len(self.full_tool_set.tools),
@@ -310,10 +350,12 @@ class LazyToolsController:
             "full_tokens": full_tokens,
             "saved_tokens": saved,
             "saved_percent": round(percent, 1),
-            "active_groups": sorted(set(self.active_groups) | set(self.pinned_groups)),
+            "active_groups": active_groups,
             "pinned_groups": list(self.pinned_groups),
             "active_tools": sorted(set(self.active_tools) | set(self.pinned_tools)),
             "auto_loaded": list(self.auto_loaded_groups),
+            "auto_single_groups": auto_single_groups,
+            "auto_single_tools": auto_single_tools,
         }
 
     # -- 目录展示 ---------------------------------------------------------
@@ -323,6 +365,8 @@ class LazyToolsController:
             return " [pinned]"
         if group_id in self.active_groups:
             return " [loaded]"
+        if group_id in self._auto_single_groups():
+            return " [auto: single-tool group]"
         return ""
 
     def _render_group_line(self, group_id: str) -> str:
@@ -338,7 +382,13 @@ class LazyToolsController:
         group_id = self.catalog.tool_to_group.get(tool.name, "")
         if active_names is None:
             active_names = set(self._active_tool_names())
-        marker = " [loaded]" if tool.name in active_names else ""
+        if tool.name in active_names:
+            if group_id in self._auto_single_groups():
+                marker = " [available: single-tool group]"
+            else:
+                marker = " [loaded]"
+        else:
+            marker = ""
         if self._looks_like_plugin_tool_manager(tool.name):
             marker += " [plugin-local tool index, not global tools]"
         description = clean_one_line(getattr(tool, "description", "") or "", 130)
@@ -360,10 +410,20 @@ class LazyToolsController:
                 )
             tool_group = self.catalog.groups[group_id]
             active_names = set(self._active_tool_names())
+            auto_single = group_id in self._auto_single_groups()
+            if auto_single:
+                state = "auto-injected: single-tool group"
+            elif (
+                group_id in self.active_groups
+                or group_id in self.pinned_groups
+            ):
+                state = "active"
+            else:
+                state = "not loaded"
             shown = tool_group.tools[:limit]
             header = (
                 f"Group '{group_id}' ({len(tool_group.tools)} tools, "
-                f"{'active' if group_id in self.active_groups or group_id in self.pinned_groups else 'not loaded'}): "
+                f"{state}): "
                 f"{tool_group.description}\n"
             )
             body = "\n".join(
@@ -371,7 +431,12 @@ class LazyToolsController:
             )
             if len(tool_group.tools) > limit:
                 body += f"\n… and {len(tool_group.tools) - limit} more tools."
-            if (
+            if auto_single:
+                footer = (
+                    "\nThis group is auto-injected because it contains a single "
+                    "tool; call the tool directly."
+                )
+            elif (
                 group_id not in self.active_groups
                 and group_id not in self.pinned_groups
             ):
@@ -392,6 +457,7 @@ class LazyToolsController:
             header = (
                 _AUTHORITATIVE_CATALOG_HINT
                 + f"Tool groups ({len(group_ids)} groups, {len(self.catalog.by_name)} tools). "
+                "Single-tool groups are auto-injected and callable directly. "
                 "Pass query=... to search tools, group=<id> to inspect a group. "
                 "Enable what you need with astrbot_load_tools; loaded/pinned groups "
                 "are already callable.\n"
@@ -464,6 +530,8 @@ class LazyToolsController:
         enabled_groups: list[str] = []
         enabled_tools: list[str] = []
         evicted_groups: list[str] = []
+        already_available: list[str] = []
+        auto_single_groups = set(self._auto_single_groups())
 
         for raw in group_inputs:
             group_id = self._resolve_group_id(raw)
@@ -472,6 +540,11 @@ class LazyToolsController:
                 continue
             for tool in self.catalog.groups[group_id].tools:
                 self.suppressed_tools.discard(tool.name)
+            if group_id in auto_single_groups:
+                already_available.append(
+                    f"group '{group_id}' (auto-injected: single-tool group)"
+                )
+                continue
             if group_id in self.pinned_groups or group_id in self.active_groups:
                 continue
             self.active_groups.append(group_id)
@@ -495,6 +568,11 @@ class LazyToolsController:
             if name in self.pinned_tools:
                 continue
             group_id = self.catalog.tool_to_group.get(name, "")
+            if group_id in auto_single_groups:
+                already_available.append(
+                    f"tool '{name}' (auto-injected: single-tool group)"
+                )
+                continue
             if group_id and (
                 group_id in self.active_groups or group_id in self.pinned_groups
             ):
@@ -540,10 +618,21 @@ class LazyToolsController:
                 "Auto-disabled older group(s) to stay within the limit: "
                 + ", ".join(evicted_groups)
             )
+        if already_available:
+            parts.append(
+                "Already available (no action needed): "
+                + "; ".join(already_available)
+            )
         if errors:
             parts.append("Ignored: " + "; ".join(errors))
         if not enabled_groups and not enabled_tools:
             body = "Nothing new to enable."
+            if already_available:
+                body += (
+                    " Already available (no action needed): "
+                    + "; ".join(already_available)
+                    + "."
+                )
             if errors:
                 body += " Ignored: " + "; ".join(errors)
             return body
@@ -563,6 +652,7 @@ class LazyToolsController:
         disabled_groups: list[str] = []
         disabled_tools: list[str] = []
         notes: list[str] = []
+        auto_single_groups = set(self._auto_single_groups())
         for raw in group_inputs:
             group_id = self._resolve_group_id(raw)
             if group_id is None:
@@ -570,6 +660,12 @@ class LazyToolsController:
                 continue
             if group_id in self.pinned_groups:
                 notes.append(f"group '{group_id}' is pinned by configuration")
+                continue
+            if group_id in auto_single_groups:
+                notes.append(
+                    f"group '{group_id}' is auto-injected because it has only "
+                    "one tool; disable auto_inject_single_tool_groups to unload it"
+                )
                 continue
             if group_id in self.active_groups:
                 self.active_groups.remove(group_id)
@@ -585,6 +681,12 @@ class LazyToolsController:
                 notes.append(f"tool '{name}' is pinned by configuration")
                 continue
             group_id = self.catalog.tool_to_group.get(name, "")
+            if group_id in auto_single_groups:
+                notes.append(
+                    f"tool '{name}' is auto-injected because its group has only "
+                    "one tool; disable auto_inject_single_tool_groups to unload it"
+                )
+                continue
             if name in self.active_tools:
                 self.active_tools.remove(name)
                 disabled_tools.append(name)
@@ -605,7 +707,11 @@ class LazyToolsController:
             parts.append("Notes: " + "; ".join(notes))
         if not disabled_groups and not disabled_tools:
             return "Nothing was disabled. " + (" ".join(notes) if notes else "")
-        remaining = sorted(set(self.active_groups) | set(self.pinned_groups))
+        remaining = sorted(
+            set(self.active_groups)
+            | set(self.pinned_groups)
+            | set(auto_single_groups)
+        )
         parts.append(
             "Active groups now: " + (", ".join(remaining) if remaining else "(none)")
         )
@@ -655,6 +761,8 @@ class LazyToolsController:
         if len(ranked) > 1 and best_score < ranked[1][1] * 2:
             return []
         if best_id in self.active_groups or best_id in self.pinned_groups:
+            return []
+        if best_id in self._auto_single_groups():
             return []
         return [best_id][:max_groups]
 
@@ -1057,6 +1165,8 @@ class LazyToolsRuntime:
             stats.setdefault("pinned_groups", list(cfg.get("pin_groups") or []))
             stats.setdefault("active_tools", [])
             stats.setdefault("auto_loaded", [])
+            stats.setdefault("auto_single_groups", [])
+            stats.setdefault("auto_single_tools", [])
         stats.update(
             {
                 "ts": time.time(),
@@ -1339,6 +1449,12 @@ class LazyToolsRuntime:
                         "tool_count": len(group.tools),
                         "hidden": group.hidden,
                         "pinned": group.id in (self.config.get("pin_groups") or []),
+                        "auto_single": bool(
+                            self.config.get(
+                                "auto_inject_single_tool_groups", True
+                            )
+                        )
+                        and len(group.tools) == 1,
                         "tools": [
                             {
                                 "name": tool.name,

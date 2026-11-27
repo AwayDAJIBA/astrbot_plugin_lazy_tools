@@ -22,7 +22,7 @@ AstrBot LLM 请求
   └─ on_llm_request(priority=-50000)
        ├─ 从全量 ToolSet 构建目录（分类 + 覆盖项）
        ├─ 恢复该会话已加载组（会话内 + state.json 持久化）
-       ├─ 生成注入 ToolSet = 3 元工具 + 常驻组/工具 + 已加载组/工具
+       ├─ 生成注入 ToolSet = 3 元工具 + 常驻组/工具 + 已加载组/工具 + 单工具组
        ├─ 替换 req.func_tool
        ├─ 替换系统提示词里的工具说明（原生 TOOL_CALL_PROMPT → 两段式说明）
        └─ 记录本次统计（注入数 / 全量数 / token 估算 / 加载组）
@@ -41,6 +41,20 @@ AstrBot LLM 请求
 | 来源不明 | 名字语义兜底 | `memory` / `sessions` / `other` |
 
 组内工具按名字排序；组按固定优先级 + id 排序。**同一组集合、同一顺序**渲染，保证前缀稳定。
+
+### 2.1 单工具组直接注入
+
+可见组里只有 **1 个工具**时（常见于只暴露一个能力的小插件 / MCP server），
+这个组会直接注入该工具，不再要求模型先 `find_tools` → `load_tools` 多走一轮：
+
+- 受 `auto_inject_single_tool_groups`（默认 `true`）控制，可在管理页关闭；
+- 只对**当前可见、且未常驻/未加载**的单工具组生效；
+- 不写入会话已加载组，`load_tools` 会返回 “already available”，`unload_tools` 会提示
+  这是自动注入、需关闭开关才能卸载；
+- 统计里单独记录 `auto_single_groups` / `auto_single_tools`，管理页组卡片带“单工具直接注入”标记。
+
+权衡：省掉一轮元工具往返、更适合“一个插件一个工具”的生态；但如果装了非常多的
+单工具插件，工具块会相应变大，此时可以关掉此开关回到纯按需。
 
 ## 3. 说明覆盖
 
